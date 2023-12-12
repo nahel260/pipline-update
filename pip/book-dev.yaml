@@ -1,0 +1,119 @@
+apiVersion: tekton.dev/v1beta1
+kind: Pipeline
+metadata:
+  name: new-pipeline
+  namespace: pipeline-nahel
+spec:
+  params:
+  - default: 'https://github.com/donkikoi/book-example.git'
+    description: Source to the GIT
+    name: git-url
+    type: string
+  - default: dev
+    description: Revision to be used
+    name: git-revision
+    type: string
+  - default: person-service
+    description: context dir within git repo where the source code is
+    name: git-context
+    type: string
+  - default: code
+    description: Where to checkout the source relative to the workspace
+    name: context-dir
+    type: string
+  - default: config/overlays/dev
+    description: real config within config git to use
+    name: kustomize-dir
+    type: string
+  - default: 'quay.io/nahel94/person-service:latest'
+    description: Image to produce
+    name: image-name
+    type: string
+  - default: nahel94
+    description: 'username for image repo '
+    name: repo-username
+    type: string
+  - description: password for image repo
+    name: repo-password
+    type: string
+  tasks:
+  - name: git-clone
+    params:
+    - name: url
+      value: $(params.git-url)
+    - name: revision
+      value: $(params.git-revision)
+    - name: subdirectory
+      value: $(params.context-dir)
+    - name: submodules
+      value: 'true'
+    - name: depth
+      value: '1'
+    - name: sslVerify
+      value: 'true'
+    - name: crtFileName
+      value: ca-bundle.crt
+    - name: deleteExisting
+      value: 'true'
+    - name: verbose
+      value: 'true'
+    - name: gitInitImage
+      value: >-
+        registry.redhat.io/openshift-pipelines/pipelines-git-init-rhel8@sha256:a538c423e7a11aae6ae582a411fdb090936458075f99af4ce5add038bb6983e8
+    - name: userHome
+      value: /tekton/home
+    taskRef:
+      kind: ClusterTask
+      name: git-clone-1-8-0
+    workspaces:
+    - name: output
+      workspace: workdir
+    - name: basic-auth
+      workspace: secret-git
+  - name: package
+    params:
+    - name: GOALS
+      value:
+      - package
+      - '-DskipTests'
+      - '-Dquarkus.container-image.push=false'
+      - '-Dquarkus.container-image.build=false'
+    - name: CONTEXT_DIR
+      value: $(params.context-dir)/$(params.git-context)
+    runAfter:
+    - git-clone
+    taskRef:
+      kind: Task
+      name: maven-caching
+    workspaces:
+    - name: source
+      workspace: workdir
+    - name: maven-settings
+      workspace: maven-settings
+  - name: build-image
+    params:
+    - name: GOALS
+      value:
+      - package
+      - '-DskipTests'
+      - '-Dquarkus.container-image.build=true'
+      - '-Dquarkus.container-image.push=true'
+      - '-Dquarkus.container-image.username=$(params.repo-username)'
+      - '-Dquarkus.container-image.password=$(params.repo-password)'
+      - '-Dquarkus.container-image.image=$(params.image-name)'
+    - name: CONTEXT_DIR
+      value: /$(params.context-dir)/$(params.git-context)
+    runAfter:
+    - package
+    taskRef:
+      kind: Task
+      name: maven-caching
+    workspaces:
+    - name: source
+      workspace: workdir
+    - name: maven-settings
+      workspace: maven-settings
+  workspaces:
+  - name: workdir
+  - name: maven-settings
+  - name: secret-git
